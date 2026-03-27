@@ -1,0 +1,28 @@
+.env
+token.json
+oauth_client.json
+Claude API KEY.txt
+Text lipit.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node / frontend build
+**/node_modules/
+frontend/node_modules/
+dist/
+build/
+.DS_Store
+
+# Cursor / IDE
+.cursor/
+.vscode/
+
+# OS
+Thumbs.db
+Desktop.ini
+
