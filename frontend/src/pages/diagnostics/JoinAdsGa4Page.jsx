@@ -37,10 +37,26 @@ export default function JoinAdsGa4Page({ filters }) {
       {data ? (
         <>
           <div className="metrics-grid">
-            <MetricCard label="Products" value={data.metrics.products} />
-            <MetricCard label="Problematic" value={data.metrics.problematic} />
-            <MetricCard label="Atenție" value={data.metrics.attention} />
-            <MetricCard label="Bun" value={data.metrics.good} />
+            <MetricCard
+              label="Products"
+              value={data.metrics.products}
+              delta={data.comparison?.metric_deltas?.products}
+            />
+            <MetricCard
+              label="Problematic"
+              value={data.metrics.problematic}
+              delta={data.comparison?.metric_deltas?.problematic}
+            />
+            <MetricCard
+              label="Atenție"
+              value={data.metrics.attention}
+              delta={data.comparison?.metric_deltas?.attention}
+            />
+            <MetricCard
+              label="Bun"
+              value={data.metrics.good}
+              delta={data.comparison?.metric_deltas?.good}
+            />
           </div>
 
           <div className="two-col" style={{ gridTemplateColumns: '1.4fr 1fr' }}>

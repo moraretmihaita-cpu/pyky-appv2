@@ -59,10 +59,26 @@ export default function PmaxPage({ filters }) {
       {data ? (
         <>
           <div className="metrics-grid">
-            <MetricCard label="Total Clicks" value={data.metrics.total_clicks} />
-            <MetricCard label="Product Clicks" value={data.metrics.product_clicks} />
-            <MetricCard label="Other Clicks" value={data.metrics.other_clicks} />
-            <MetricCard label="Feed Share %" value={data.metrics.feed_share} />
+            <MetricCard
+              label="Total Clicks"
+              value={data.metrics.total_clicks}
+              delta={data.comparison?.metric_deltas?.total_clicks}
+            />
+            <MetricCard
+              label="Product Clicks"
+              value={data.metrics.product_clicks}
+              delta={data.comparison?.metric_deltas?.product_clicks}
+            />
+            <MetricCard
+              label="Other Clicks"
+              value={data.metrics.other_clicks}
+              delta={data.comparison?.metric_deltas?.other_clicks}
+            />
+            <MetricCard
+              label="Feed Share %"
+              value={data.metrics.feed_share}
+              delta={data.comparison?.metric_deltas?.feed_share}
+            />
           </div>
 
           <div className="two-col" style={{ gridTemplateColumns: '1fr 1fr' }}>

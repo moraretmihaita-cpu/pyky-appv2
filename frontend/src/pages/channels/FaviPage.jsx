@@ -37,16 +37,44 @@ export default function FaviPage({ filters }) {
       {data ? (
         <>
           <div className="metrics-grid">
-            <MetricCard label="Sessions" value={data.overview.sessions} />
-            <MetricCard label="Purchases" value={data.overview.purchases} />
-            <MetricCard label="Revenue" value={data.overview.revenue} />
-            <MetricCard label="Purchase rate %" value={data.overview.purchase_rate} />
+            <MetricCard
+              label="Sessions"
+              value={data.overview.sessions}
+              delta={data.comparison?.metric_deltas?.sessions}
+            />
+            <MetricCard
+              label="Purchases"
+              value={data.overview.purchases}
+              delta={data.comparison?.metric_deltas?.purchases}
+            />
+            <MetricCard
+              label="Revenue"
+              value={data.overview.revenue}
+              delta={data.comparison?.metric_deltas?.revenue}
+            />
+            <MetricCard
+              label="Purchase rate %"
+              value={data.overview.purchase_rate}
+              delta={data.comparison?.metric_deltas?.purchase_rate}
+            />
           </div>
 
           <div className="metrics-grid metrics-grid-3">
-            <MetricCard label="Engaged sessions" value={data.overview.engaged_sessions} />
-            <MetricCard label="Engagement rate %" value={data.overview.engagement_rate} />
-            <MetricCard label="Revenue / session" value={data.overview.revenue_per_session} />
+            <MetricCard
+              label="Engaged sessions"
+              value={data.overview.engaged_sessions}
+              delta={data.comparison?.metric_deltas?.engaged_sessions}
+            />
+            <MetricCard
+              label="Engagement rate %"
+              value={data.overview.engagement_rate}
+              delta={data.comparison?.metric_deltas?.engagement_rate}
+            />
+            <MetricCard
+              label="Revenue / session"
+              value={data.overview.revenue_per_session}
+              delta={data.comparison?.metric_deltas?.revenue_per_session}
+            />
           </div>
 
           <div className="two-col" style={{ gridTemplateColumns: '1fr 1fr' }}>

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 from typing import Any, Dict
@@ -761,6 +762,22 @@ def get_previous_ga4_range_for_overview(start_date: str, end_date: str):
     start = str(start_date or '').strip().lower()
     end = str(end_date or '').strip().lower()
 
+    # Support ISO date strings (YYYY-MM-DD) used by CUSTOM_RANGE in frontend.
+    # We compare by shifting the same inclusive window by 1 day backwards.
+    # Example: 2026-03-01 -> 2026-03-10  =>  previous: 2026-02-29 -> 2026-02-08
+    iso_re = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+    if iso_re.match(str(start_date or '').strip()) and iso_re.match(str(end_date or '').strip()):
+        try:
+            start_dt = datetime.strptime(str(start_date).strip(), '%Y-%m-%d').date()
+            end_dt = datetime.strptime(str(end_date).strip(), '%Y-%m-%d').date()
+            if end_dt >= start_dt:
+                length_days = (end_dt - start_dt).days + 1
+                prev_end = start_dt - timedelta(days=1)
+                prev_start = prev_end - timedelta(days=length_days - 1)
+                return prev_start.isoformat(), prev_end.isoformat()
+        except Exception:
+            pass
+
     m_start = re.match(r'^(\d+)daysago$', start)
     m_end = re.match(r'^(\d+)daysago$', end)
 
@@ -776,6 +793,39 @@ def get_previous_ga4_range_for_overview(start_date: str, end_date: str):
             return f'{start_days + window + 1}daysAgo', f'{end_days + window + 1}daysAgo'
 
     return '', ''
+
+
+def _build_comparison_from_metrics(
+    current_metrics: Dict[str, Any],
+    previous_metrics: Dict[str, Any],
+    current_label: str = '',
+    previous_label: str = '',
+) -> Dict[str, Any]:
+    if not current_metrics:
+        current_metrics = {}
+    if not previous_metrics:
+        return {
+            'available': False,
+            'reason': 'Nu există suficiente date pentru perioada anterioară.',
+            'metric_deltas': {},
+            'current_label': current_label,
+            'previous_label': previous_label,
+        }
+
+    # metric_deltas must match MetricCard expectations: {current, previous, abs, pct}
+    metric_deltas: Dict[str, Any] = {}
+    for key in current_metrics.keys():
+        current_val = current_metrics.get(key, 0)
+        previous_val = previous_metrics.get(key, 0)
+        metric_deltas[key] = _build_metric_delta(current_val, previous_val)
+
+    return {
+        'available': True,
+        'reason': '',
+        'metric_deltas': metric_deltas,
+        'current_label': current_label,
+        'previous_label': previous_label,
+    }
 
 
 def _fetch_ga4_product_source_df(start_date: str, end_date: str) -> pd.DataFrame:
@@ -1468,73 +1518,390 @@ def overview_endpoint(ga4_start: str = '30daysAgo', ga4_end: str = 'today', ads_
 
 
 @app.get('/api/google-ads/campaigns')
-def google_ads_campaigns_endpoint(ads_date_range: str = 'LAST_30_DAYS', campaign_filter: str = '') -> Dict[str, Any]:
-    return _google_ads_campaigns_impl({'adsDateRange': ads_date_range, 'campaignFilter': campaign_filter})
+def google_ads_campaigns_endpoint(
+    ads_date_range: str = 'LAST_30_DAYS',
+    campaign_filter: str = '',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _google_ads_campaigns_impl({'adsDateRange': ads_date_range, 'campaignFilter': campaign_filter})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_ads_range = get_previous_ads_preset_for_overview(ads_date_range)
+    if not prev_ads_range:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=ads_date_range, previous_label='')
+        return current
+
+    previous = _google_ads_campaigns_impl({'adsDateRange': prev_ads_range, 'campaignFilter': campaign_filter})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=ads_date_range,
+        previous_label=prev_ads_range,
+    )
+    return current
 
 
 @app.get('/api/google-ads/products')
-def google_ads_products_endpoint(ads_date_range: str = 'LAST_30_DAYS', campaign_filter: str = '', product_filter: str = '', selected_item_id: str = '') -> Dict[str, Any]:
-    return _google_ads_products_impl({'adsDateRange': ads_date_range, 'campaignFilter': campaign_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+def google_ads_products_endpoint(
+    ads_date_range: str = 'LAST_30_DAYS',
+    campaign_filter: str = '',
+    product_filter: str = '',
+    selected_item_id: str = '',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _google_ads_products_impl({'adsDateRange': ads_date_range, 'campaignFilter': campaign_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_ads_range = get_previous_ads_preset_for_overview(ads_date_range)
+    if not prev_ads_range:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=ads_date_range, previous_label='')
+        return current
+
+    previous = _google_ads_products_impl({'adsDateRange': prev_ads_range, 'campaignFilter': campaign_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=ads_date_range,
+        previous_label=prev_ads_range,
+    )
+    return current
 
 
 @app.get('/api/google-ads/pmax-campaign-products')
-def google_ads_pmax_campaign_products_endpoint(ads_date_range: str = 'LAST_30_DAYS', campaign_filter: str = '', product_filter: str = '', selected_item_id: str = '', pmax_campaign: str = '') -> Dict[str, Any]:
-    return _pmax_campaign_products_impl({'adsDateRange': ads_date_range, 'campaignFilter': campaign_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id, 'pmaxCampaignName': pmax_campaign})
+def google_ads_pmax_campaign_products_endpoint(
+    ads_date_range: str = 'LAST_30_DAYS',
+    campaign_filter: str = '',
+    product_filter: str = '',
+    selected_item_id: str = '',
+    pmax_campaign: str = '',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _pmax_campaign_products_impl({'adsDateRange': ads_date_range, 'campaignFilter': campaign_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id, 'pmaxCampaignName': pmax_campaign})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_ads_range = get_previous_ads_preset_for_overview(ads_date_range)
+    if not prev_ads_range:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=ads_date_range, previous_label='')
+        return current
+
+    previous = _pmax_campaign_products_impl({'adsDateRange': prev_ads_range, 'campaignFilter': campaign_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id, 'pmaxCampaignName': pmax_campaign})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=ads_date_range,
+        previous_label=prev_ads_range,
+    )
+    return current
 
 
 @app.get('/api/meta/campaigns')
-def meta_campaigns_endpoint(meta_date_preset: str = 'last_30d', campaign_filter: str = '') -> Dict[str, Any]:
-    return _meta_campaigns_impl({'metaDateRange': meta_date_preset, 'campaignFilter': campaign_filter})
+def meta_campaigns_endpoint(
+    meta_date_preset: str = 'last_30d',
+    campaign_filter: str = '',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _meta_campaigns_impl({'metaDateRange': meta_date_preset, 'campaignFilter': campaign_filter})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_meta_preset = get_previous_meta_preset_for_overview(meta_date_preset)
+    if not prev_meta_preset:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=meta_date_preset, previous_label='')
+        return current
+
+    previous = _meta_campaigns_impl({'metaDateRange': prev_meta_preset, 'campaignFilter': campaign_filter})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=meta_date_preset,
+        previous_label=prev_meta_preset,
+    )
+    return current
 
 
 @app.get('/api/meta/adsets')
-def meta_adsets_endpoint(meta_date_preset: str = 'last_30d', campaign_filter: str = '') -> Dict[str, Any]:
-    return _meta_adsets_impl({'metaDateRange': meta_date_preset, 'campaignFilter': campaign_filter})
+def meta_adsets_endpoint(
+    meta_date_preset: str = 'last_30d',
+    campaign_filter: str = '',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _meta_adsets_impl({'metaDateRange': meta_date_preset, 'campaignFilter': campaign_filter})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_meta_preset = get_previous_meta_preset_for_overview(meta_date_preset)
+    if not prev_meta_preset:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=meta_date_preset, previous_label='')
+        return current
+
+    previous = _meta_adsets_impl({'metaDateRange': prev_meta_preset, 'campaignFilter': campaign_filter})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=meta_date_preset,
+        previous_label=prev_meta_preset,
+    )
+    return current
 
 
 @app.get('/api/meta/products')
-def meta_products_endpoint(meta_date_preset: str = 'last_30d', campaign_filter: str = '', product_filter: str = '', selected_item_id: str = '') -> Dict[str, Any]:
-    return _meta_products_impl({'metaDateRange': meta_date_preset, 'campaignFilter': campaign_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+def meta_products_endpoint(
+    meta_date_preset: str = 'last_30d',
+    campaign_filter: str = '',
+    product_filter: str = '',
+    selected_item_id: str = '',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _meta_products_impl({'metaDateRange': meta_date_preset, 'campaignFilter': campaign_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_meta_preset = get_previous_meta_preset_for_overview(meta_date_preset)
+    if not prev_meta_preset:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=meta_date_preset, previous_label='')
+        return current
+
+    previous = _meta_products_impl({'metaDateRange': prev_meta_preset, 'campaignFilter': campaign_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=meta_date_preset,
+        previous_label=prev_meta_preset,
+    )
+    return current
 
 
 @app.get('/api/ga4/products')
-def ga4_products_endpoint(ga4_start: str = '30daysAgo', ga4_end: str = 'today', product_filter: str = '', selected_item_id: str = '') -> Dict[str, Any]:
-    return _ga4_products_impl({'ga4Start': ga4_start, 'ga4End': ga4_end, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+def ga4_products_endpoint(
+    ga4_start: str = '30daysAgo',
+    ga4_end: str = 'today',
+    product_filter: str = '',
+    selected_item_id: str = '',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _ga4_products_impl({'ga4Start': ga4_start, 'ga4End': ga4_end, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_ga4_start, prev_ga4_end = get_previous_ga4_range_for_overview(ga4_start, ga4_end)
+    if not prev_ga4_start or not prev_ga4_end:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=f'{ga4_start} → {ga4_end}', previous_label='')
+        return current
+
+    previous = _ga4_products_impl({'ga4Start': prev_ga4_start, 'ga4End': prev_ga4_end, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=f'{ga4_start} → {ga4_end}',
+        previous_label=f'{prev_ga4_start} → {prev_ga4_end}',
+    )
+    return current
 
 
 @app.get('/api/ga4/traffic')
-def ga4_traffic_endpoint(ga4_start: str = '30daysAgo', ga4_end: str = 'today', traffic_type: str = 'toate', campaign_filter: str = '') -> Dict[str, Any]:
-    return _ga4_traffic_impl({'ga4Start': ga4_start, 'ga4End': ga4_end, 'trafficType': traffic_type, 'campaignFilter': campaign_filter})
+def ga4_traffic_endpoint(
+    ga4_start: str = '30daysAgo',
+    ga4_end: str = 'today',
+    traffic_type: str = 'toate',
+    campaign_filter: str = '',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _ga4_traffic_impl({'ga4Start': ga4_start, 'ga4End': ga4_end, 'trafficType': traffic_type, 'campaignFilter': campaign_filter})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_ga4_start, prev_ga4_end = get_previous_ga4_range_for_overview(ga4_start, ga4_end)
+    if not prev_ga4_start or not prev_ga4_end:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=f'{ga4_start} → {ga4_end}', previous_label='')
+        return current
+
+    previous = _ga4_traffic_impl({'ga4Start': prev_ga4_start, 'ga4End': prev_ga4_end, 'trafficType': traffic_type, 'campaignFilter': campaign_filter})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=f'{ga4_start} → {ga4_end}',
+        previous_label=f'{prev_ga4_start} → {prev_ga4_end}',
+    )
+    return current
 
 
 @app.get('/api/ga4/landing-pages')
-def ga4_landing_pages_endpoint(ga4_start: str = '30daysAgo', ga4_end: str = 'today', page_type: str = 'toate') -> Dict[str, Any]:
-    return _landing_pages_impl({'ga4Start': ga4_start, 'ga4End': ga4_end, 'pageType': page_type})
+def ga4_landing_pages_endpoint(
+    ga4_start: str = '30daysAgo',
+    ga4_end: str = 'today',
+    page_type: str = 'toate',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _landing_pages_impl({'ga4Start': ga4_start, 'ga4End': ga4_end, 'pageType': page_type})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_ga4_start, prev_ga4_end = get_previous_ga4_range_for_overview(ga4_start, ga4_end)
+    if not prev_ga4_start or not prev_ga4_end:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=f'{ga4_start} → {ga4_end}', previous_label='')
+        return current
+
+    previous = _landing_pages_impl({'ga4Start': prev_ga4_start, 'ga4End': prev_ga4_end, 'pageType': page_type})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=f'{ga4_start} → {ga4_end}',
+        previous_label=f'{prev_ga4_start} → {prev_ga4_end}',
+    )
+    return current
 
 
 @app.get('/api/ga4/devices')
-def ga4_devices_endpoint(ga4_start: str = '30daysAgo', ga4_end: str = 'today') -> Dict[str, Any]:
-    return _devices_impl({'ga4Start': ga4_start, 'ga4End': ga4_end})
+def ga4_devices_endpoint(
+    ga4_start: str = '30daysAgo',
+    ga4_end: str = 'today',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _devices_impl({'ga4Start': ga4_start, 'ga4End': ga4_end})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_ga4_start, prev_ga4_end = get_previous_ga4_range_for_overview(ga4_start, ga4_end)
+    if not prev_ga4_start or not prev_ga4_end:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=f'{ga4_start} → {ga4_end}', previous_label='')
+        return current
+
+    previous = _devices_impl({'ga4Start': prev_ga4_start, 'ga4End': prev_ga4_end})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=f'{ga4_start} → {ga4_end}',
+        previous_label=f'{prev_ga4_start} → {prev_ga4_end}',
+    )
+    return current
 
 
 @app.get('/api/ga4/product-channels')
-def ga4_product_channels_endpoint(ga4_start: str = '30daysAgo', ga4_end: str = 'today', source_filter: str = '', product_filter: str = '', selected_item_id: str = '') -> Dict[str, Any]:
-    return _product_channels_impl({'ga4Start': ga4_start, 'ga4End': ga4_end, 'sourceFilter': source_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+def ga4_product_channels_endpoint(
+    ga4_start: str = '30daysAgo',
+    ga4_end: str = 'today',
+    source_filter: str = '',
+    product_filter: str = '',
+    selected_item_id: str = '',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _product_channels_impl({'ga4Start': ga4_start, 'ga4End': ga4_end, 'sourceFilter': source_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_ga4_start, prev_ga4_end = get_previous_ga4_range_for_overview(ga4_start, ga4_end)
+    if not prev_ga4_start or not prev_ga4_end:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=f'{ga4_start} → {ga4_end}', previous_label='')
+        return current
+
+    previous = _product_channels_impl({'ga4Start': prev_ga4_start, 'ga4End': prev_ga4_end, 'sourceFilter': source_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=f'{ga4_start} → {ga4_end}',
+        previous_label=f'{prev_ga4_start} → {prev_ga4_end}',
+    )
+    return current
 
 
 @app.get('/api/join-ads-ga4')
-def join_ads_ga4_endpoint(ga4_start: str = '30daysAgo', ga4_end: str = 'today', ads_date_range: str = 'LAST_30_DAYS', campaign_filter: str = '', product_filter: str = '', selected_item_id: str = '') -> Dict[str, Any]:
-    return _join_ads_ga4_impl({'ga4Start': ga4_start, 'ga4End': ga4_end, 'adsDateRange': ads_date_range, 'campaignFilter': campaign_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+def join_ads_ga4_endpoint(
+    ga4_start: str = '30daysAgo',
+    ga4_end: str = 'today',
+    ads_date_range: str = 'LAST_30_DAYS',
+    campaign_filter: str = '',
+    product_filter: str = '',
+    selected_item_id: str = '',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _join_ads_ga4_impl({'ga4Start': ga4_start, 'ga4End': ga4_end, 'adsDateRange': ads_date_range, 'campaignFilter': campaign_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_ga4_start, prev_ga4_end = get_previous_ga4_range_for_overview(ga4_start, ga4_end)
+    prev_ads_range = get_previous_ads_preset_for_overview(ads_date_range)
+    if not prev_ga4_start or not prev_ga4_end or not prev_ads_range:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=f'GA4 {ga4_start}→{ga4_end} + Ads {ads_date_range}', previous_label='')
+        return current
+
+    previous = _join_ads_ga4_impl({'ga4Start': prev_ga4_start, 'ga4End': prev_ga4_end, 'adsDateRange': prev_ads_range, 'campaignFilter': campaign_filter, 'productFilter': product_filter, 'selectedItemId': selected_item_id})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=f'GA4 {ga4_start}→{ga4_end}',
+        previous_label=f'GA4 {prev_ga4_start}→{prev_ga4_end}',
+    )
+    return current
 
 
 @app.get('/api/pmax-feed-vs-other')
-def pmax_feed_vs_other_endpoint(ads_date_range: str = 'LAST_30_DAYS', campaign_filter: str = '') -> Dict[str, Any]:
-    return _pmax_impl({'adsDateRange': ads_date_range, 'campaignFilter': campaign_filter})
+def pmax_feed_vs_other_endpoint(
+    ads_date_range: str = 'LAST_30_DAYS',
+    campaign_filter: str = '',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _pmax_impl({'adsDateRange': ads_date_range, 'campaignFilter': campaign_filter})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_ads_range = get_previous_ads_preset_for_overview(ads_date_range)
+    if not prev_ads_range:
+        current['comparison'] = _build_comparison_from_metrics(current.get('metrics', {}), {}, current_label=ads_date_range, previous_label='')
+        return current
+
+    previous = _pmax_impl({'adsDateRange': prev_ads_range, 'campaignFilter': campaign_filter})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('metrics', {}),
+        previous.get('metrics', {}),
+        current_label=ads_date_range,
+        previous_label=prev_ads_range,
+    )
+    return current
 
 
 @app.get('/api/favi')
-def favi_endpoint(ga4_start: str = '30daysAgo', ga4_end: str = 'today', product_filter: str = '', selected_item_id: str = '', page_type: str = 'toate') -> Dict[str, Any]:
-    return _favi_impl({'ga4Start': ga4_start, 'ga4End': ga4_end, 'productFilter': product_filter, 'selectedItemId': selected_item_id, 'pageType': page_type})
+def favi_endpoint(
+    ga4_start: str = '30daysAgo',
+    ga4_end: str = 'today',
+    product_filter: str = '',
+    selected_item_id: str = '',
+    page_type: str = 'toate',
+    compare_previous: str = 'false',
+) -> Dict[str, Any]:
+    current = _favi_impl({'ga4Start': ga4_start, 'ga4End': ga4_end, 'productFilter': product_filter, 'selectedItemId': selected_item_id, 'pageType': page_type})
+
+    if str(compare_previous).lower() != 'true':
+        return current
+
+    prev_ga4_start, prev_ga4_end = get_previous_ga4_range_for_overview(ga4_start, ga4_end)
+    if not prev_ga4_start or not prev_ga4_end:
+        current['comparison'] = _build_comparison_from_metrics(current.get('overview', {}), {}, current_label=f'{ga4_start} → {ga4_end}', previous_label='')
+        return current
+
+    previous = _favi_impl({'ga4Start': prev_ga4_start, 'ga4End': prev_ga4_end, 'productFilter': product_filter, 'selectedItemId': selected_item_id, 'pageType': page_type})
+    current['comparison'] = _build_comparison_from_metrics(
+        current.get('overview', {}),
+        previous.get('overview', {}),
+        current_label=f'{ga4_start} → {ga4_end}',
+        previous_label=f'{prev_ga4_start} → {prev_ga4_end}',
+    )
+    return current
 
 
 @app.get('/api/funnel/coverage')
